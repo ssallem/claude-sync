@@ -1,0 +1,22 @@
+[package]
+name = "claude-sync"
+version = "0.1.0"
+edition = "2024"
+description = "Sync ~/.claude/ across machines. Like chezmoi, but understands settings.json."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ssallem/claude-sync"
+keywords = ["claude", "claude-code", "dotfiles", "sync", "git"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+git2 = "0.20"
+serde_json = "1"
+walkdir = "2"
+regex = "1"
+anyhow = "1"
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"

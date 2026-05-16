@@ -1,0 +1,21 @@
+# Default ignore patterns for claude-sync
+# Lines starting with # are comments. Glob-style patterns.
+
+# Session logs — too large + sensitive
+projects/**
+
+# Tokens and credentials
+*.token
+oauth_*
+credentials*
+*_secret*
+.env*
+
+# Caches and temp
+cache/
+tmp/
+*.log
+
+# OS-specific
+.DS_Store
+Thumbs.db
