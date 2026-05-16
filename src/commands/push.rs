@@ -29,11 +29,14 @@ pub fn run(message: Option<&str>) -> anyhow::Result<()> {
     // Clear first so files newly added to stowignore/gitignore (or deleted from
     // disk) drop out of the index instead of lingering as stale entries.
     //
-    // Safety: index.clear() and add_path() mutate the in-memory Index only. If
-    // stage_files errors mid-loop we early-return before index.write() ever
-    // runs, so the on-disk .git/index file keeps its previous contents and the
-    // user can simply retry. The in-memory Index object is dropped at function
-    // exit and is never reused after an error.
+    // Note on durability: stage_files writes the on-disk .git/index when it
+    // finishes successfully. If add_path errors mid-loop we early-return
+    // before index.write() runs, so the on-disk index keeps its previous
+    // contents and the user can simply retry. If stage_files succeeds but a
+    // later step (has_pending_changes / do_commit / do_push) fails, the
+    // on-disk index is left in a "cleared and re-staged" state — this is
+    // benign because the next push starts with the same index.clear() +
+    // re-stage flow, so the inconsistency self-heals on retry.
     index.clear().context("clear index")?;
     let staged =
         stage_files(&mut index, &candidates, &claude_dir).context("stage files into index")?;

@@ -4,6 +4,38 @@ All notable changes to `claude-sync` are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Candidates targeted for `v0.2`:
+
+- Secret scanner: detect UTF-16-encoded files (BOM-aware) so leaks in
+  Windows-native text aren't silently skipped.
+- Auth: explicit SSH known-hosts certificate-check callback instead of
+  relying on the default agent behaviour.
+- Repo hygiene: ship a default `.gitattributes` so line-ending normalisation
+  is consistent across Windows / macOS / Linux checkouts.
+
+## [0.1.2] - 2026-05-17
+
+Hotfix release addressing review findings from `v0.1.1`.
+
+### Fixed
+- `push`: corrected misleading comment in `stage_files` about
+  `index.write()` lifecycle. The on-disk `.git/index` is updated once
+  `stage_files` finishes; if a later step fails, the next push's
+  `index.clear()` + re-stage flow self-heals the state.
+- `pull`: fallback conflict marker now uses the current branch name
+  (`>>>>>>> origin/<branch>`) instead of hardcoded `origin/main`, matching
+  the dynamic-branch behaviour added in `v0.1.1`.
+- `ci`: `cargo build` and `cargo test` jobs now pass `--locked` so CI fails
+  fast if `Cargo.lock` drifts from `Cargo.toml`.
+
+### Documentation
+- `README`: clarified that `claude-sync init` always seeds the first
+  commit on the `main` branch regardless of the user's
+  `init.defaultBranch` setting; subsequent `push` / `pull` use the current
+  branch.
+
 ## [0.1.1] - 2026-05-17
 
 Patch release addressing the post-v0.1.0 critical review.

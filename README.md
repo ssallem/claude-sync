@@ -50,6 +50,10 @@ claude-sync init https://github.com/you/dotclaude.git
 claude-sync pull
 ```
 
+> Note: `claude-sync` seeds the first commit on the `main` branch regardless of
+> your local `init.defaultBranch` setting (e.g. `master`). Subsequent `push` /
+> `pull` use whatever branch `HEAD` currently points to.
+
 ## What it tracks
 
 - `agents/`, `hooks/`, `skills/`, `rules/`, `commands/`

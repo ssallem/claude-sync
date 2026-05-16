@@ -25,9 +25,9 @@ jobs:
       - name: Cache cargo build artifacts
         uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --locked --verbose
       - name: Test
-        run: cargo test --all --verbose
+        run: cargo test --locked --all --verbose
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 

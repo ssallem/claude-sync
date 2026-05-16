@@ -46,7 +46,14 @@ pub fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let stats = three_way_merge(&repo, &claude_dir, head_oid, fetch_oid, merge_base)?;
+    let stats = three_way_merge(
+        &repo,
+        &claude_dir,
+        head_oid,
+        fetch_oid,
+        merge_base,
+        &branch_name,
+    )?;
     finalize_merge(&repo, head_oid, fetch_oid, &stats)?;
     Ok(())
 }
@@ -139,6 +146,7 @@ fn three_way_merge(
     head_oid: Oid,
     fetch_oid: Oid,
     base_oid: Oid,
+    branch: &str,
 ) -> anyhow::Result<MergeStats> {
     let our_tree = repo.find_commit(head_oid)?.tree()?;
     let their_tree = repo.find_commit(fetch_oid)?.tree()?;
@@ -159,7 +167,7 @@ fn three_way_merge(
     )?;
     apply_deletions(claude_dir, &merged, &our_tree, &conflicted)?;
     if merged.has_conflicts() {
-        apply_conflicts(repo, claude_dir, &merged, &mut stats)?;
+        apply_conflicts(repo, claude_dir, &merged, branch, &mut stats)?;
     }
     Ok(stats)
 }
@@ -256,6 +264,7 @@ fn apply_conflicts(
     repo: &Repository,
     claude_dir: &Path,
     merged: &git2::Index,
+    branch: &str,
     stats: &mut MergeStats,
 ) -> anyhow::Result<()> {
     for c in merged.conflicts()? {
@@ -266,7 +275,7 @@ fn apply_conflicts(
             apply_json_conflict(repo, &abs, &c)?;
             stats.json_conflicts += 1;
         } else {
-            apply_text_conflict(repo, &abs, &c)?;
+            apply_text_conflict(repo, &abs, &c, branch)?;
             stats.text_conflicts += 1;
         }
     }
@@ -308,14 +317,19 @@ fn load_json_side(
     serde_json::from_str(text).with_context(|| format!("parse JSON from blob {}", entry.id))
 }
 
-fn apply_text_conflict(repo: &Repository, abs: &Path, c: &IndexConflict) -> anyhow::Result<()> {
+fn apply_text_conflict(
+    repo: &Repository,
+    abs: &Path,
+    c: &IndexConflict,
+    branch: &str,
+) -> anyhow::Result<()> {
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let (ancestor, ours, theirs) = match (&c.ancestor, &c.our, &c.their) {
         (Some(a), Some(o), Some(t)) => (a, o, t),
         // Modify/delete or add/add — write whichever side exists with a banner.
-        _ => return write_fallback_conflict(repo, abs, c),
+        _ => return write_fallback_conflict(repo, abs, c, branch),
     };
     let result = repo
         .merge_file_from_index(ancestor, ours, theirs, None)
@@ -324,7 +338,12 @@ fn apply_text_conflict(repo: &Repository, abs: &Path, c: &IndexConflict) -> anyh
     Ok(())
 }
 
-fn write_fallback_conflict(repo: &Repository, abs: &Path, c: &IndexConflict) -> anyhow::Result<()> {
+fn write_fallback_conflict(
+    repo: &Repository,
+    abs: &Path,
+    c: &IndexConflict,
+    branch: &str,
+) -> anyhow::Result<()> {
     let mut body = String::from("<<<<<<< claude-sync (modify/delete conflict)\n");
     if let Some(e) = &c.our {
         append_blob_text(repo, &mut body, e)?;
@@ -333,7 +352,7 @@ fn write_fallback_conflict(repo: &Repository, abs: &Path, c: &IndexConflict) -> 
     if let Some(e) = &c.their {
         append_blob_text(repo, &mut body, e)?;
     }
-    body.push_str(">>>>>>> origin/main\n");
+    body.push_str(&format!(">>>>>>> origin/{branch}\n"));
     std::fs::write(abs, body).with_context(|| format!("write {}", abs.display()))?;
     Ok(())
 }
