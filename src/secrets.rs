@@ -16,7 +16,11 @@ pub struct SecretMatch {
 // every pattern is evaluated against every line.
 static PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
     let raw: &[(&str, &str)] = &[
-        ("github_pat_fine_grained", r"gho_[A-Za-z0-9]{36,}"),
+        // GitHub: `gho_` is the OAuth user-to-server token prefix; the new
+        // fine-grained PAT format is `github_pat_*`. Keeping them split makes
+        // the report tell you what kind of credential leaked.
+        ("github_oauth_token", r"gho_[A-Za-z0-9]{36,}"),
+        ("github_pat_fine_grained", r"github_pat_[A-Za-z0-9_]{36,}"),
         ("github_pat_classic", r"ghp_[A-Za-z0-9]{36,}"),
         ("anthropic_api_key", r"sk-ant-[A-Za-z0-9_\-]{20,}"),
         ("openai_style_key", r"sk-[A-Za-z0-9]{20,}"),
@@ -30,6 +34,14 @@ static PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
         ),
         ("json_oauth_token", r#"(?i)"oauth_token"\s*:\s*"[^"]+""#),
         ("google_api_key", r"AIza[0-9A-Za-z_\-]{35}"),
+        // Additional vendor patterns. AWS access key IDs are deterministic
+        // 20-char strings starting with AKIA; GitLab/Slack/HF use their own
+        // prefixes. Azure storage connection strings are intentionally omitted —
+        // the format is loose enough to cause false positives.
+        ("gitlab_pat", r"glpat-[A-Za-z0-9_\-]{20,}"),
+        ("aws_access_key", r"AKIA[0-9A-Z]{16}"),
+        ("slack_token", r"xox[baprs]-[0-9A-Za-z\-]{10,}"),
+        ("huggingface_token", r"hf_[A-Za-z0-9]{34,}"),
     ];
     raw.iter()
         .map(|(name, pat)| {
@@ -102,12 +114,12 @@ mod tests {
     }
 
     #[test]
-    fn detects_github_pat() {
+    fn detects_github_oauth_token() {
         let txt = "token=gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab";
         let hits = scan_text(txt);
         assert!(
-            hits.iter()
-                .any(|h| h.pattern_name == "github_pat_fine_grained")
+            hits.iter().any(|h| h.pattern_name == "github_oauth_token"),
+            "hits: {hits:?}"
         );
     }
 
@@ -120,7 +132,42 @@ mod tests {
     fn gho_token_is_detected() {
         let hits = scan_text("gho_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].pattern_name, "github_pat_fine_grained");
+        assert_eq!(hits[0].pattern_name, "github_oauth_token");
+    }
+
+    #[test]
+    fn github_fine_grained_pat_is_detected() {
+        // Real fine-grained PATs use the `github_pat_` literal prefix, not gho_.
+        let hits = scan_text("github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ012345");
+        assert!(
+            hits.iter()
+                .any(|h| h.pattern_name == "github_pat_fine_grained"),
+            "hits: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn gitlab_pat_is_detected() {
+        // Synthetic value: 20+ chars after the `glpat-` prefix. Built at
+        // runtime so GitHub's push protection scanner doesn't flag the
+        // literal as a real GitLab token.
+        let txt = format!("export GL=glpat-{}", "X".repeat(24));
+        let hits = scan_text(&txt);
+        assert!(
+            hits.iter().any(|h| h.pattern_name == "gitlab_pat"),
+            "hits: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn aws_access_key_is_detected() {
+        // Built at runtime for the same reason as gitlab_pat above.
+        let txt = format!("AWS_ACCESS_KEY_ID=AKIA{}", "B".repeat(16));
+        let hits = scan_text(&txt);
+        assert!(
+            hits.iter().any(|h| h.pattern_name == "aws_access_key"),
+            "hits: {hits:?}"
+        );
     }
 
     #[test]
@@ -159,9 +206,6 @@ mod tests {
         // column/redaction math.
         let txt = "한글 설정 token=gho_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 끝";
         let hits = scan_text(txt);
-        assert!(
-            hits.iter()
-                .any(|h| h.pattern_name == "github_pat_fine_grained")
-        );
+        assert!(hits.iter().any(|h| h.pattern_name == "github_oauth_token"));
     }
 }

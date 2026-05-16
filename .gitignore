@@ -10,5 +10,4 @@
 .DS_Store
 Thumbs.db
 
-# Internal team work log — not for public repo
 .claude/

@@ -82,10 +82,12 @@ fn glob_to_regex(pattern: &str) -> String {
         Some(rest) => (true, rest),
         None => (false, pattern),
     };
-    let (dir_only, p) = match p.strip_suffix('/') {
-        Some(rest) => (true, rest),
-        None => (false, p),
-    };
+    // We strip an optional trailing slash but don't otherwise distinguish
+    // directory-only patterns: in practice we match against file paths only
+    // (the walker yields files), and both `cache` and `cache/` should ignore
+    // everything under the directory. The single `(?:/.*)?$` tail below covers
+    // both cases.
+    let p = p.strip_suffix('/').unwrap_or(p);
 
     let has_slash = p.contains('/');
 
@@ -126,13 +128,9 @@ fn glob_to_regex(pattern: &str) -> String {
         i += 1;
     }
 
-    if dir_only {
-        // `cache/` matches the directory itself and everything inside.
-        out.push_str("(?:/.*)?$");
-    } else {
-        // Files match exactly; directories match themselves and contents.
-        out.push_str("(?:/.*)?$");
-    }
+    // The optional `/.*` lets a single rule match both the bare path and any
+    // descendant — keeps `cache` and `cache/x.bin` both ignored under one rule.
+    out.push_str("(?:/.*)?$");
     out
 }
 

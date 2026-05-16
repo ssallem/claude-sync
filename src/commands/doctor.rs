@@ -190,18 +190,28 @@ fn check_origin_remote(repo: &Repository) -> CheckResult {
 fn check_ignore_files(dir: &Path) -> CheckResult {
     let has_stow = dir.join(".stowignore").exists();
     let has_git = dir.join(".gitignore").exists();
-    if has_stow || has_git {
-        CheckResult {
+    match (has_stow, has_git) {
+        (true, true) => CheckResult {
             level: Level::Ok,
             label: "ignore files",
-            detail: format!(".stowignore={has_stow} .gitignore={has_git}"),
-        }
-    } else {
-        CheckResult {
+            detail: ".stowignore and .gitignore both present".to_string(),
+        },
+        (false, false) => CheckResult {
+            level: Level::Fail,
+            label: "ignore files",
+            detail: "missing both .stowignore and .gitignore (run `claude-sync init` to seed)"
+                .to_string(),
+        },
+        (false, true) => CheckResult {
             level: Level::Warn,
             label: "ignore files",
-            detail: "neither .stowignore nor .gitignore present".to_string(),
-        }
+            detail: ".stowignore missing (only .gitignore present)".to_string(),
+        },
+        (true, false) => CheckResult {
+            level: Level::Warn,
+            label: "ignore files",
+            detail: ".gitignore missing (only .stowignore present)".to_string(),
+        },
     }
 }
 

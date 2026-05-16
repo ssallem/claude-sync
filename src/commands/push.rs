@@ -28,6 +28,12 @@ pub fn run(message: Option<&str>) -> anyhow::Result<()> {
     let mut index = repo.index().context("open repo index")?;
     // Clear first so files newly added to stowignore/gitignore (or deleted from
     // disk) drop out of the index instead of lingering as stale entries.
+    //
+    // Safety: index.clear() and add_path() mutate the in-memory Index only. If
+    // stage_files errors mid-loop we early-return before index.write() ever
+    // runs, so the on-disk .git/index file keeps its previous contents and the
+    // user can simply retry. The in-memory Index object is dropped at function
+    // exit and is never reused after an error.
     index.clear().context("clear index")?;
     let staged =
         stage_files(&mut index, &candidates, &claude_dir).context("stage files into index")?;
@@ -43,12 +49,23 @@ pub fn run(message: Option<&str>) -> anyhow::Result<()> {
     };
 
     let (commit_oid, short) = do_commit(&repo, &mut index, &msg).context("create commit")?;
-    do_push(&repo).context("push to origin/main")?;
+    let branch_name = current_branch_name(&repo);
+    do_push(&repo, &branch_name).with_context(|| format!("push to origin/{branch_name}"))?;
 
-    println!("Pushed {} file(s) -> origin/main", staged);
+    println!("Pushed {} file(s) -> origin/{}", staged, branch_name);
     println!("  commit {short} {msg}");
     let _ = commit_oid; // silence unused warning across cfg variants
     Ok(())
+}
+
+/// Resolve the active branch's short name. Falls back to "main" only when HEAD
+/// is unborn or detached — `do_commit` always lands the first commit on main,
+/// so by the time we push we'll usually have a real branch shorthand.
+fn current_branch_name(repo: &Repository) -> String {
+    repo.head()
+        .ok()
+        .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        .unwrap_or_else(|| "main".to_string())
 }
 
 fn collect_candidates(
@@ -246,7 +263,7 @@ fn short_oid(repo: &Repository, oid: git2::Oid) -> String {
         .unwrap_or_else(|| oid.to_string().chars().take(7).collect())
 }
 
-fn do_push(repo: &Repository) -> anyhow::Result<()> {
+fn do_push(repo: &Repository, branch: &str) -> anyhow::Result<()> {
     let mut remote = repo
         .find_remote("origin")
         .context("no remote 'origin' — re-run init?")?;
@@ -257,8 +274,9 @@ fn do_push(repo: &Repository) -> anyhow::Result<()> {
     let mut opts = git2::PushOptions::new();
     opts.remote_callbacks(cbs);
 
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     remote
-        .push(&["refs/heads/main:refs/heads/main"], Some(&mut opts))
+        .push(&[refspec.as_str()], Some(&mut opts))
         .map_err(|e| {
             anyhow!(
                 "push failed: {e}. Hint: configure git credential helper or use HTTPS PAT / SSH agent."

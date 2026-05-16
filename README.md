@@ -3,7 +3,6 @@
 > Sync your `~/.claude/` across machines. Like chezmoi, but it understands `settings.json`.
 
 [![CI](https://github.com/ssallem/claude-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/ssallem/claude-sync/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/claude-sync.svg)](https://crates.io/crates/claude-sync)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 <!-- TODO: demo.gif -->
@@ -18,12 +17,30 @@ If you use Claude Code on more than one machine, your `~/.claude/` folder drifts
 - **Automatic exclusion** of `projects/`, OAuth tokens, and known secret patterns.
 - **`settings.json` deep merge** — three-way merge with conflict markers, not a "last write wins" overwrite.
 
+## Installation
+
+`claude-sync` is not yet published to crates.io. Pick one of:
+
+**Prebuilt binary (recommended).** Grab the latest `claude-sync` executable for your OS from the [Releases page](https://github.com/ssallem/claude-sync/releases) and drop it on your `PATH`.
+
+**Install from git with cargo.**
+
+```sh
+cargo install --git https://github.com/ssallem/claude-sync
+```
+
+**Build from source.**
+
+```sh
+git clone https://github.com/ssallem/claude-sync
+cd claude-sync
+cargo build --release
+# binary at target/release/claude-sync
+```
+
 ## Quick start
 
 ```sh
-cargo install claude-sync
-# or grab a prebuilt binary from the Releases page
-
 claude-sync init https://github.com/you/dotclaude.git
 # edit ~/.claude/... as usual
 claude-sync push
@@ -62,7 +79,7 @@ claude-sync pull
 |---|---|---|
 | Scope | `~/.claude/` only | Any dotfiles |
 | `settings.json` handling | JSON deep-merge with conflict markers | Generic text / template |
-| Secret handling | Auto-redact 8 built-in patterns | Manual (`chezmoi encrypt` opt-in) |
+| Secret handling | Auto-redact 13 built-in patterns | Manual (`chezmoi encrypt` opt-in) |
 | Default ignore list | Domain-aware (`projects/`, tokens) | Generic |
 | Binary | Single static binary | Single static binary |
 

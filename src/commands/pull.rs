@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, anyhow};
-use git2::{IndexConflict, IndexEntry, Oid, RemoteCallbacks, Repository, ResetType, Tree};
+use git2::{
+    IndexConflict, IndexEntry, ObjectType, Oid, RemoteCallbacks, Repository, ResetType, Tree,
+};
 
 use crate::commands::util;
 use crate::merge;
@@ -11,7 +13,8 @@ pub fn run() -> anyhow::Result<()> {
     let claude_dir = util::claude_dir()?;
     let repo = util::open_repo(&claude_dir)?;
 
-    fetch_origin_main(&repo)?;
+    let branch_name = current_branch_name(&repo);
+    fetch_origin_branch(&repo, &branch_name)?;
 
     let head_oid = match repo.head().ok().and_then(|h| h.target()) {
         Some(oid) => oid,
@@ -19,7 +22,7 @@ pub fn run() -> anyhow::Result<()> {
         // so the user's intent is "seed from remote". Skip the dirty check —
         // the seed files written by init (.gitignore/.stowignore) would
         // otherwise wedge the workflow.
-        None => return adopt_fetch_head(&repo),
+        None => return adopt_fetch_head(&repo, &branch_name),
     };
     // Past the unborn branch case: now refuse a true merge against a dirty
     // worktree, since that would silently drop the user's local edits.
@@ -38,14 +41,24 @@ pub fn run() -> anyhow::Result<()> {
         .map_err(|_| anyhow!("Unrelated histories — manual fix needed"))?;
 
     if merge_base == head_oid {
-        let count = fast_forward(&repo, fetch_oid)?;
+        let count = fast_forward(&repo, fetch_oid, &branch_name)?;
         println!("Fast-forwarded {count} file(s)");
         return Ok(());
     }
 
     let stats = three_way_merge(&repo, &claude_dir, head_oid, fetch_oid, merge_base)?;
-    report_merge(&stats);
+    finalize_merge(&repo, head_oid, fetch_oid, &stats)?;
     Ok(())
+}
+
+/// Resolve the active branch's short name. Falls back to "main" only when HEAD
+/// is unborn or detached — both are unusual states for a sync repo but cheap to
+/// handle safely.
+fn current_branch_name(repo: &Repository) -> String {
+    repo.head()
+        .ok()
+        .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        .unwrap_or_else(|| "main".to_string())
 }
 
 fn abort_if_dirty(repo: &Repository) -> anyhow::Result<()> {
@@ -58,7 +71,7 @@ fn abort_if_dirty(repo: &Repository) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fetch_origin_main(repo: &Repository) -> anyhow::Result<()> {
+fn fetch_origin_branch(repo: &Repository, branch: &str) -> anyhow::Result<()> {
     let mut remote = repo
         .find_remote("origin")
         .context("no remote 'origin' — re-run init?")?;
@@ -67,38 +80,34 @@ fn fetch_origin_main(repo: &Repository) -> anyhow::Result<()> {
     let mut opts = git2::FetchOptions::new();
     opts.remote_callbacks(cbs);
     remote
-        .fetch(&["main"], Some(&mut opts), None)
+        .fetch(&[branch], Some(&mut opts), None)
         .map_err(|e| anyhow!("fetch failed: {e}"))?;
     Ok(())
 }
 
 /// Used when the local branch has no commits but FETCH_HEAD does — equivalent
 /// to a fresh clone's first checkout.
-fn adopt_fetch_head(repo: &Repository) -> anyhow::Result<()> {
+fn adopt_fetch_head(repo: &Repository, branch: &str) -> anyhow::Result<()> {
     let fetch_oid = repo
         .refname_to_id("FETCH_HEAD")
         .context("read FETCH_HEAD")?;
-    let count = fast_forward(repo, fetch_oid)?;
-    println!("Initialized from origin/main ({count} file(s))");
+    let count = fast_forward(repo, fetch_oid, branch)?;
+    println!("Initialized from origin/{branch} ({count} file(s))");
     Ok(())
 }
 
-fn fast_forward(repo: &Repository, target: Oid) -> anyhow::Result<usize> {
+fn fast_forward(repo: &Repository, target: Oid, branch: &str) -> anyhow::Result<usize> {
     let commit = repo.find_commit(target).context("find FETCH_HEAD commit")?;
     let tree = commit.tree().context("peel FETCH_HEAD to tree")?;
     let file_count = count_tree_files(&tree);
 
-    // Move refs/heads/main and HEAD before resetting working tree, so the
+    let ref_name = format!("refs/heads/{branch}");
+    // Move the branch ref and HEAD before resetting working tree, so the
     // index/worktree state matches the new branch tip atomically.
-    repo.reference(
-        "refs/heads/main",
-        target,
-        true,
-        "claude-sync pull fast-forward",
-    )
-    .context("update refs/heads/main")?;
-    repo.set_head("refs/heads/main")
-        .context("set HEAD to main")?;
+    repo.reference(&ref_name, target, true, "claude-sync pull fast-forward")
+        .with_context(|| format!("update {ref_name}"))?;
+    repo.set_head(&ref_name)
+        .with_context(|| format!("set HEAD to {branch}"))?;
 
     let obj = commit.into_object();
     repo.reset(&obj, ResetType::Hard, None)
@@ -342,17 +351,85 @@ fn append_blob_text(
     Ok(())
 }
 
-fn report_merge(stats: &MergeStats) {
+/// After a 3-way merge, commit the result when clean (two-parent merge commit)
+/// or leave conflicts on disk for the user to resolve before the next push.
+fn finalize_merge(
+    repo: &Repository,
+    head_oid: Oid,
+    fetch_oid: Oid,
+    stats: &MergeStats,
+) -> anyhow::Result<()> {
     let total_conflicts = stats.json_conflicts + stats.text_conflicts;
     if total_conflicts == 0 {
-        println!("Merged {} file(s) cleanly", stats.auto_files);
-        return;
+        let short = commit_merge(repo, head_oid, fetch_oid)?;
+        println!(
+            "Merged {} file(s) and committed as {short}",
+            stats.auto_files
+        );
+        return Ok(());
     }
     println!(
-        "Merged with conflicts in {} file(s) ({} JSON, {} text) — resolve and run `claude-sync push`",
+        "Merged with conflicts in {} file(s) ({} JSON, {} text)",
         total_conflicts, stats.json_conflicts, stats.text_conflicts
     );
+    if stats.json_conflicts > 0 {
+        println!(
+            "  JSON conflict files contain a `_conflicts` array key — review and remove it, then run `claude-sync push`."
+        );
+    }
+    if stats.text_conflicts > 0 {
+        println!(
+            "  Text conflict files use standard <<<<<<< / ======= / >>>>>>> markers — resolve, then run `claude-sync push`."
+        );
+    }
     if stats.auto_files > 0 {
         println!("  ({} other file(s) auto-merged)", stats.auto_files);
     }
+    Ok(())
+}
+
+/// Build the merge commit from the current on-disk worktree (which already
+/// reflects auto-merged content) with both pre-merge tips as parents.
+fn commit_merge(repo: &Repository, head_oid: Oid, fetch_oid: Oid) -> anyhow::Result<String> {
+    let sig = repo.signature().map_err(|_| {
+        anyhow!("git user.name/email not configured. Run: git config --global user.name <name>")
+    })?;
+    // Re-stage the worktree so the tree we commit reflects auto-merged files
+    // written by `apply_auto_merged` / `apply_deletions`.
+    let mut index = repo.index().context("open repo index")?;
+    index.read(true).context("reload index from disk")?;
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .context("re-stage merged worktree")?;
+    // Remove anything that no longer exists on disk (e.g. files deleted on the
+    // remote side and applied by `apply_deletions`).
+    index
+        .update_all(["*"].iter(), None)
+        .context("drop deleted files from index")?;
+    let tree_oid = index.write_tree().context("write merged tree")?;
+    index.write().context("write index")?;
+    let tree = repo.find_tree(tree_oid).context("find merged tree")?;
+    let head_commit = repo.find_commit(head_oid).context("find HEAD commit")?;
+    let fetch_commit = repo
+        .find_commit(fetch_oid)
+        .context("find FETCH_HEAD commit")?;
+    let oid = repo
+        .commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "merge: pull from origin",
+            &tree,
+            &[&head_commit, &fetch_commit],
+        )
+        .context("write merge commit")?;
+    Ok(short_oid(repo, oid))
+}
+
+fn short_oid(repo: &Repository, oid: Oid) -> String {
+    repo.find_object(oid, Some(ObjectType::Commit))
+        .and_then(|o| o.short_id())
+        .ok()
+        .and_then(|buf| buf.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| oid.to_string().chars().take(7).collect())
 }
