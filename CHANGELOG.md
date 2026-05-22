@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `init` performs a best-effort `git fetch` after `remote add`, so `status`
+  reports `ahead`/`behind` immediately on the very first run instead of
+  stalling at `(unborn)`/0. Uses the remote's default refspec to cover both
+  `main` and `master` defaults. Silent on failure to keep empty-remote init
+  valid.
+
+### Changed
+- `.stowignore.default` expanded from 21 to ~50 lines, adding
+  `.credentials.json`, `history.jsonl`, `daemon/`, `daemon.lock`,
+  `daemon.status.json`, `sessions/`, `session-env/`, `session-data/`,
+  `image-cache/`, `paste-cache/`, `backups/`, `ide/`, `.serena/`,
+  `plugins/marketplaces/`, `.last-cleanup`, `mcp-needs-auth-cache.json`,
+  `debug/`, `jobs/`, `file-history/`, `shell-snapshots/` to align with the
+  UI's `DEFAULT_STOWIGNORE`. Leading-dot files like `.credentials.json` were
+  not matched by the previous `credentials*` glob.
+
+### Tests
+- 4 new cargo tests: `default_excludes_dot_credentials`,
+  `default_excludes_history_and_daemon`,
+  `default_does_not_match_normal_sync_paths`,
+  `try_initial_fetch_does_not_panic_on_no_remote`.
+
 Candidates targeted for `v0.2`:
 
 - Secret scanner: detect UTF-16-encoded files (BOM-aware) so leaks in

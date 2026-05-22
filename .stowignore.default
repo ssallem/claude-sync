@@ -4,17 +4,45 @@
 # Session logs — too large + sensitive
 projects/**
 
-# Tokens and credentials
+# Tokens and credentials (NEVER sync)
 *.token
 oauth_*
 credentials*
+.credentials.json
 *_secret*
 .env*
 
+# Per-machine working state
+history.jsonl
+file-history/
+shell-snapshots/
+sessions/
+session-env/
+session-data/
+
 # Caches and temp
 cache/
+image-cache/
+paste-cache/
+backups/
 tmp/
 *.log
+
+# IDE and tools
+ide/
+.serena/
+plugins/marketplaces/
+
+# Daemon runtime
+daemon/
+daemon.lock
+daemon.status.json
+
+# Runtime markers
+.last-cleanup
+mcp-needs-auth-cache.json
+debug/
+jobs/
 
 # OS-specific
 .DS_Store

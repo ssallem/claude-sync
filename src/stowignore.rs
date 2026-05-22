@@ -227,4 +227,51 @@ mod tests {
         let s = load_in(tmp.path());
         assert!(s.is_ignored(&tmp.path().join("projects/sub/dir/file.jsonl"), tmp.path()));
     }
+
+    #[test]
+    fn default_excludes_dot_credentials() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let s = load_in(tmp.path());
+        assert!(s.is_ignored(&tmp.path().join(".credentials.json"), tmp.path()));
+    }
+
+    #[test]
+    fn default_excludes_history_and_daemon() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let s = load_in(tmp.path());
+        assert!(s.is_ignored(&tmp.path().join("history.jsonl"), tmp.path()));
+        assert!(s.is_ignored(&tmp.path().join("daemon/run.pid"), tmp.path()));
+        assert!(s.is_ignored(&tmp.path().join("sessions/abc.json"), tmp.path()));
+    }
+
+    #[test]
+    fn default_does_not_match_normal_sync_paths() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let s = load_in(tmp.path());
+        // Files/dirs that users actively sync — must NOT be ignored
+        assert!(
+            !s.is_ignored(&tmp.path().join("CLAUDE.md"), tmp.path()),
+            "CLAUDE.md should not be ignored"
+        );
+        assert!(
+            !s.is_ignored(&tmp.path().join("agents/coder.md"), tmp.path()),
+            "agents/ should not be ignored"
+        );
+        assert!(
+            !s.is_ignored(&tmp.path().join("commands/sync.md"), tmp.path()),
+            "commands/ should not be ignored"
+        );
+        assert!(
+            !s.is_ignored(&tmp.path().join("skills/foo/SKILL.md"), tmp.path()),
+            "skills/ should not be ignored"
+        );
+        assert!(
+            !s.is_ignored(&tmp.path().join("rules/lint.md"), tmp.path()),
+            "rules/ should not be ignored"
+        );
+        assert!(
+            !s.is_ignored(&tmp.path().join("hooks/pre.sh"), tmp.path()),
+            "hooks/ should not be ignored"
+        );
+    }
 }

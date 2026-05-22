@@ -77,12 +77,38 @@ pub fn run(remote: &str) -> anyhow::Result<()> {
     repo.remote("origin", remote)
         .with_context(|| format!("add remote origin={remote}"))?;
 
+    // Best-effort initial fetch so `status` can report ahead/behind immediately.
+    // Failure is intentionally silenced — empty origin is a valid initial state.
+    try_initial_fetch(&repo);
+
     println!(
         "Initialized {} as git repo, remote={}",
         claude_dir.display(),
         remote
     );
     Ok(())
+}
+
+/// Attempt to fetch from origin using its configured default refspec.
+/// Silently returns on any failure so init remains idempotent even with an
+/// empty or unreachable remote.
+fn try_initial_fetch(repo: &git2::Repository) {
+    let Ok(mut remote) = repo.find_remote("origin") else {
+        return;
+    };
+    let mut cbs = git2::RemoteCallbacks::new();
+    cbs.credentials(util::auth_callback);
+    let mut opts = git2::FetchOptions::new();
+    opts.remote_callbacks(cbs);
+    // Empty refspec → libgit2 uses the remote's configured default
+    // (`+refs/heads/*:refs/remotes/origin/*`), which fetches every branch
+    // regardless of whether origin's default is `main`, `master`, etc.
+    let refspecs: &[&str] = &[];
+    if remote.fetch(refspecs, Some(&mut opts), None).is_ok() {
+        println!("Fetched from origin");
+    } else {
+        eprintln!("note: initial fetch skipped (empty or unreachable origin)");
+    }
 }
 
 fn scan_for_secrets(
@@ -114,4 +140,17 @@ fn scan_for_secrets(
         }
     }
     Ok(findings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_initial_fetch_does_not_panic_on_no_remote() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let repo = git2::Repository::init(tmp.path()).expect("init");
+        // No remote added — must return silently without panic.
+        try_initial_fetch(&repo);
+    }
 }
