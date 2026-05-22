@@ -18,10 +18,10 @@ pub fn run() -> anyhow::Result<()> {
         }
     };
 
-    let changes = collect_changes(&repo)?;
+    let stow = stowignore::load(&claude_dir).context("load stowignore rules")?;
+    let changes = collect_changes(&repo, &stow, &claude_dir)?;
     report_changes(&changes);
 
-    let stow = stowignore::load(&claude_dir).context("load stowignore rules")?;
     let counts = count_tracking(&claude_dir, &repo, &stow);
     println!(
         "Tracking {} file(s) (excluded: {} by .stowignore / {} by .gitignore)",
@@ -40,7 +40,11 @@ struct ChangeEntry {
     rel: String,
 }
 
-fn collect_changes(repo: &Repository) -> anyhow::Result<Vec<ChangeEntry>> {
+fn collect_changes(
+    repo: &Repository,
+    stow: &stowignore::Stowignore,
+    claude_dir: &Path,
+) -> anyhow::Result<Vec<ChangeEntry>> {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).include_ignored(false);
     let statuses = repo.statuses(Some(&mut opts)).context("read repo status")?;
@@ -60,6 +64,13 @@ fn collect_changes(repo: &Repository) -> anyhow::Result<Vec<ChangeEntry>> {
             continue;
         };
         let Some(path) = s.path() else { continue };
+        // Filter out stowignore matches so secrets like `.credentials.json`
+        // never leak into the user-visible change list (and never get scanned
+        // / pushed downstream).
+        let abs = claude_dir.join(path);
+        if stow.is_ignored(&abs, claude_dir) {
+            continue;
+        }
         out.push(ChangeEntry {
             code,
             rel: path.to_string(),
@@ -201,4 +212,36 @@ fn upstream_oid(repo: &Repository, branch_name: &str) -> Option<git2::Oid> {
         return Some(oid);
     }
     repo.refname_to_id("FETCH_HEAD").ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn secret_files_excluded_from_collect_changes() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let repo = git2::Repository::init(tmp.path()).expect("git init");
+        // Normal file and secret file side-by-side.
+        fs::write(tmp.path().join("CLAUDE.md"), "# test").expect("write CLAUDE.md");
+        fs::write(
+            tmp.path().join(".credentials.json"),
+            r#"{"key":"sk-ant"}"#,
+        )
+        .expect("write .credentials.json");
+        let stow = crate::stowignore::load(tmp.path()).expect("load stowignore");
+        let changes = collect_changes(&repo, &stow, tmp.path()).expect("collect_changes");
+        let paths: Vec<&str> = changes.iter().map(|c| c.rel.as_str()).collect();
+        assert!(
+            paths.contains(&"CLAUDE.md"),
+            "CLAUDE.md should appear in changes, got {:?}",
+            paths
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains(".credentials.json")),
+            ".credentials.json must be excluded by stowignore, got {:?}",
+            paths
+        );
+    }
 }

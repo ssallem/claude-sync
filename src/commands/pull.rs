@@ -8,6 +8,7 @@ use git2::{
 
 use crate::commands::util;
 use crate::merge;
+use crate::stowignore;
 
 pub fn run() -> anyhow::Result<()> {
     let claude_dir = util::claude_dir()?;
@@ -54,7 +55,7 @@ pub fn run() -> anyhow::Result<()> {
         merge_base,
         &branch_name,
     )?;
-    finalize_merge(&repo, head_oid, fetch_oid, &stats)?;
+    finalize_merge(&repo, &claude_dir, head_oid, fetch_oid, &stats)?;
     Ok(())
 }
 
@@ -374,13 +375,14 @@ fn append_blob_text(
 /// or leave conflicts on disk for the user to resolve before the next push.
 fn finalize_merge(
     repo: &Repository,
+    claude_dir: &Path,
     head_oid: Oid,
     fetch_oid: Oid,
     stats: &MergeStats,
 ) -> anyhow::Result<()> {
     let total_conflicts = stats.json_conflicts + stats.text_conflicts;
     if total_conflicts == 0 {
-        let short = commit_merge(repo, head_oid, fetch_oid)?;
+        let short = commit_merge(repo, claude_dir, head_oid, fetch_oid)?;
         println!(
             "Merged {} file(s) and committed as {short}",
             stats.auto_files
@@ -409,17 +411,45 @@ fn finalize_merge(
 
 /// Build the merge commit from the current on-disk worktree (which already
 /// reflects auto-merged content) with both pre-merge tips as parents.
-fn commit_merge(repo: &Repository, head_oid: Oid, fetch_oid: Oid) -> anyhow::Result<String> {
+fn commit_merge(
+    repo: &Repository,
+    claude_dir: &Path,
+    head_oid: Oid,
+    fetch_oid: Oid,
+) -> anyhow::Result<String> {
     let sig = repo.signature().map_err(|_| {
         anyhow!("git user.name/email not configured. Run: git config --global user.name <name>")
     })?;
     // Re-stage the worktree so the tree we commit reflects auto-merged files
-    // written by `apply_auto_merged` / `apply_deletions`.
+    // written by `apply_auto_merged` / `apply_deletions`. Apply the same
+    // stowignore filter as `push` / `status` so secret files (e.g. tokens or
+    // .credentials.json) that exist on disk never sneak into a merge commit.
+    let stow = stowignore::load(claude_dir).context("load stowignore for merge staging")?;
     let mut index = repo.index().context("open repo index")?;
     index.read(true).context("reload index from disk")?;
-    index
-        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-        .context("re-stage merged worktree")?;
+    for entry in walkdir::WalkDir::new(claude_dir)
+        .into_iter()
+        .filter_entry(|e| {
+            let p = e.path();
+            if p == claude_dir {
+                return true;
+            }
+            // Never descend into git metadata.
+            if p.file_name().and_then(|s| s.to_str()) == Some(".git") {
+                return false;
+            }
+            !stow.is_ignored(p, claude_dir)
+        })
+        .filter_map(|r| r.ok())
+    {
+        if entry.file_type().is_file()
+            && let Ok(rel) = entry.path().strip_prefix(claude_dir)
+        {
+            // git index expects forward-slash paths even on Windows.
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let _ = index.add_path(std::path::Path::new(&rel_str));
+        }
+    }
     // Remove anything that no longer exists on disk (e.g. files deleted on the
     // remote side and applied by `apply_deletions`).
     index

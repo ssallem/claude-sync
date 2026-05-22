@@ -1,6 +1,6 @@
 [package]
 name = "claude-sync"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Sync ~/.claude/ across machines. Like chezmoi, but understands settings.json."
 license = "MIT OR Apache-2.0"
